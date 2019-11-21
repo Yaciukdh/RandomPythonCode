@@ -1089,7 +1089,7 @@ def main():
 #    else:
 #        print("debug mode off, type debug for debug messages")
     name = sys.argv[1]
-    hostList = readFileContents("knownhosts_udp.txt")
+    hostList = readFileContents("hosts.txt")
     ipz, portz, port, ind = setIpPorts(hostList)
     dim = len(ipz)
     majority_var = (dim//2)+1
