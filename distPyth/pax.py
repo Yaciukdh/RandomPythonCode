@@ -12,7 +12,7 @@ leader_flag = 0
 highest_log_num = 0
 
 #debug allows print statements
-debug = 1
+debug = 0
 
 #exit thread variable
 exit_flag = 0
@@ -71,28 +71,27 @@ chp_var = []
 # votes
 vote_list= []
 
+#recv_var is a flag saying the recv thread has ended.
+recv_var = 0
+#flag for recovery
+recovery_flag = 0
+
 def update_dict(key, val):
     global w_dict
-    if debug:
-        print("updating dictionary\n", w_dict)
+    mutex.acquire()
     w_dict[key] = val
+    mutex.release()
     make_dict_table()
 
 def make_dict_table():
     global w_dict
+    mutex.acquire()
     keys = list(w_dict.keys())
     val  = list(w_dict.values())
     dict_table = []
-    if debug:
-        print()
-        print("making dictionary list to be written")
-        print(w_dict)
-        print(keys)
-        print(val)
-
     for x in range(len(w_dict)):
         dict_table.append([keys[x],val[x]])
-
+    mutex.release()
     writeDict(dict_table)
 
 def writeDict(dict_table):
@@ -105,9 +104,6 @@ def writeDict(dict_table):
 
 def list_to_dic(dict_table):
     global w_dict
-#    print("w_dict: ",w_dict)
-#    print("dict_table:\n",dict_table)
-
     for x in range(len(dict_table)):
         w_dict[dict_table[x][0]] = dict_table[x][1]
 
@@ -122,7 +118,6 @@ def checkConflict2(message, amCreator):
 
     global dictionary
     sm = message.split()
-
 
     meetingName=sm[1]
     day=sm[2].split("/")[1]
@@ -180,19 +175,19 @@ def readFileContents(fileName):
 
 def dictLexiComp(a,b):
     #sort by day first
-    if a[1] < b[1]:
+    if a[3] < b[3]:
         return -1
-    if (a[1] > b[1]):
+    if (a[3] > b[3]):
         return 1
     #sort by start time next
-    if a[2] < b[2]:
+    if a[4] < b[4]:
         return -1
-    if (a[2] > b[2]):
+    if (a[4] > b[4]):
         return 1
     #finally sort by name
-    if (a[0] < b[0]):
+    if (a[2] < b[2]):
         return -1
-    elif (a[0] > b[0]):
+    elif (a[2] > b[2]):
         return 1
     return 0
 
@@ -248,7 +243,7 @@ def listLog():
                 ) if i[1] == "schedule" else "{0} cancel {1}".format(i[0],i[2]))
     else:
         for i in log:
-            print("{0} {1} 10/{2}/18 {3} {4} {5}".format(
+            print("{0} {1} 10/{2}/2018 {3} {4} {5}".format(
                 i[1],
                 i[2],
                 i[3],
@@ -297,7 +292,7 @@ def find_next_log_entry():
     if w == -1:
         if debug:
             print("end of log found:", i, "now next log spot")
-            next_log_spot = i
+        next_log_spot = i
 
     if debug:
         print("value of next log proposal = ", next_log_spot)
@@ -313,6 +308,9 @@ def file_check_and_load():
     else:
         writeStableStorage(True)
 
+    find_next_log_entry()
+    proposer_inbox.append([-1, next_log_spot])
+
 def recovery_1():
     global log
     global dictionary
@@ -324,10 +322,16 @@ def recovery_1():
     if len(log)!= 0:
         highest_log_entry = log[len(log)-1]
 
-    start = len(log)
-    while start%5!=0:
-        start = start-1
 
+    start = len(log)
+    start = start-(start%5)
+
+#    print(start)
+    offset = w_dict.get("offset")
+    if offset is None:
+        offset = [0,0]
+
+    start = start+offset[0]
     if debug:
         print("schedule length:", len(dictionary))
         print("log length:", len(log))
@@ -337,20 +341,27 @@ def recovery_1():
     while start < len(log):
         index = start
         log_entry = log[index]
-        print(log_entry)
+#        print(log_entry)
         if log_entry[1]=="cancel":
 #            print("canceling...")
             cancel_meeting(log_entry[2])
         if log_entry[1]=="schedule":
 #            print("scheduling...")
-            meeting_info = w_dict.get(log_entry[0])[1].split()
+            meeting_info = ts_get(log_entry[0])[1].split()
 
             meeting_info.insert(0,index)
-            print(meeting_info)
+#            print(meeting_info)
             schedule_meeting(meeting_info)
         start = start+1
-    find_next_log_entry()
-    proposer_inbox.append([-1, next_log_spot])
+#    find_next_log_entry()
+#    proposer_inbox.append([-1, next_log_spot])
+
+def ts_get(key):
+    global w_dict
+    mutex.acquire
+    val = w_dict.get(key)
+    mutex.release
+    return val
 
 def readStableStorage():
     global log
@@ -370,7 +381,7 @@ def readStableStorage():
         chp_var = decoder.decode(f.read())
     with open(name + "_V_and_M.txt", 'r') as f:
         dict_table = decoder.decode(f.read())
-    print("dict table", dict_table)
+#    print("dict table", dict_table)
     list_to_dic(dict_table)
     if debug:
         print("working_dict\n",w_dict)
@@ -410,6 +421,7 @@ def thread_learner(ip, port, ind, ipz, portz):
     global highest_log_num
     global log
     global chp_var
+    global recovery_flag
     if debug:
         print("learner ready")
     var = []
@@ -426,22 +438,34 @@ def thread_learner(ip, port, ind, ipz, portz):
         elif message[0] == "filled":
             if debug:
                 print("recovered received!")
-            writeStableStorage(False)
+            if recovery_flag:
+                print("flagged area, should not happen without lagged network")
+                find_next_log_entry()
+                temp = highest_log_num
+                value = [len(log)%5,temp]
+                update_dict("offset",value)
+                writeStableStorage(True)
+                recovery_flag = 0
+            else:
+                writeStableStorage(False)
             del (learner_inbox[0])
+#            print("recovered, type away!")
 
         elif message[0] == "commit":
             if debug:
                 print("committing...")
             writeStableStorage(False)
             if (len(log))%5 == 0:
-                print("LENGTH OF LOG IS", len(log))
-                print("HIGHEST ENTRY IS", highest_log_num)
+#                print("LENGTH OF LOG IS", len(log))
+#                print("HIGHEST ENTRY IS", highest_log_num)
                 find_next_log_entry()
                 temp = highest_log_num # suspicious
                 if temp == len(log)-1: # suspicious
                     writeStableStorage(True)
+                    update_dict("offset",[len(log)%5,temp])
                 else:
                      proposer_inbox.append([-1,temp])
+                     recovery_flag =  1
             del (learner_inbox[0])
 
         else:
@@ -498,14 +522,18 @@ def thread_acceptor(ip, port, ind, ipz, portz):
 def thread_recver_prom(log_num,k):
     global prop_sock
     global vote_list
-    print("begin recv")
+    global recv_var
+
     start = time.clock()
     end   = time.clock()
-    while (end-start) < 2 or error_flag:
+    prop_sock[0].settimeout(.2)
+    while (end-start) < .5:
         error_flag = 0
         end = time.clock()
         try:
             new_data = decoder.decode(prop_sock[0].recv(4096).decode('utf-8'))
+ #           if debug:
+ #               print("new promise:", new_data)
         except socket.timeout:
             error_flag = 1
         if error_flag == 0:
@@ -513,19 +541,26 @@ def thread_recver_prom(log_num,k):
                 if new_data[1] == log_num:
                     if new_data[3] == k:
                         vote_list.append(new_data)
-    print("receiving..and exiting")
+    if debug:
+#        print("receiving..and exiting")
+        print("promise votes:", vote_list)
+    recv_var = 0
     sys.exit()
 
 def thread_recver_accept(log_num,k):
     global prop_sock
     global vote_list
+    global recv_var
     start = time.clock()
     end   = time.clock()
-    while (end-start) < 3 or error_flag:
+    prop_sock[0].settimeout(.2)
+    while (end-start) < .5:
         error_flag = 0
         end = time.clock()
         try:
             new_data = decoder.decode(prop_sock[0].recv(4096).decode('utf-8'))
+            if debug:
+                print("new accept:", new_data)
         except socket.timeout:
             error_flag = 1
         if error_flag == 0:
@@ -533,17 +568,21 @@ def thread_recver_accept(log_num,k):
                 if new_data[1] == log_num:
                     if new_data[2] == k:
                         vote_list.append(new_data)
+    if debug:
+#        print("receiving..and exiting")
+        print("ack votes:", vote_list)
+    recv_var = 0
     sys.exit()
 
 def thread_sender(socket ,ip, port, data):
-    print("begin send")
+#    print("begin send: ",data)
     sendToFull(socket, data.encode(), (ip, port))
-    print("sending...and exit")
+#    print("sending...and exit")
     sys.exit()
 
 def sendToFull(sock, data, addr):
-    if debug:
-        print("sending this to full:", len(data),data, addr[0],int(addr[1]))
+#    if debug:
+#        print("sending this to full:", len(data),data, addr[0],int(addr[1]))
 
     ret = len(data) - sock.sendto(data, (addr[0],int(addr[1])))
     if ret > 0:
@@ -579,7 +618,8 @@ def cancel_meeting(event_name):
     if del_flag == 0:
         if debug:
             print("entry not found, adding cancel to list of not cancelled events")
-        not_cancelled.append(name)
+#        print("name of uncancelled event:", event_name)
+        not_cancelled.append(event_name)
 
 def schedule_meeting(msg):
     global dictionary
@@ -590,12 +630,11 @@ def schedule_meeting(msg):
     dontadd_flag = 0
     msg[3] = msg[3].split("/")[1]
     msg[6] = msg[6].split(",")
-
     if debug:
         print("event being scheduled: ", msg)
 
     while i < len(not_cancelled):
-        if msg[0] == not_cancelled[i]:
+        if msg[2] == not_cancelled[i]:
             dontadd_flag = 1
             del(not_cancelled[i])
         i = i+1
@@ -676,22 +715,24 @@ def recv_accept_send_ack(data,sock):
     reply_index = data[1]
     m_and_message = data[2]
     log_num = data[3]
+    old_m_and_msg = ts_get(log_num)
     if debug:
         print()
         print("RECEIVE ACCEPTED")
         print("received:",m_and_message, "from", ipz[reply_index], "for log ", log_num)
         print("aka", data)
+        print("old m message:\n",old_m_and_msg)
     ack = []
-    old_m_and_msg = w_dict.get(log_num)
     if old_m_and_msg is None:
         update_dict(log_num,m_and_message)
-        old_m_and_msg = w_dict.get(log_num)
+        old_m_and_msg = ts_get(log_num)
 
     if old_m_and_msg[0]<= m_and_message[0]:
         update_dict(log_num,m_and_message)
         ack.append("ack")
         ack.append(log_num)
         ack.append(data[4])
+        ack.append(ind)
         ack =encoder.encode(ack)
         sendToFull(sock, ack.encode(), (ipz[reply_index], int(portz[reply_index]) + 1))
     else:
@@ -699,7 +740,7 @@ def recv_accept_send_ack(data,sock):
             print("message failed to pass m check, refusing to reply")
 
     if debug:
-        print(w_dict)
+#        print(w_dict)
         print("RECEIVE END")
         print()
 
@@ -713,6 +754,7 @@ def send_accept(m_and_msg, log_num):
     global prop_sock
     global leader_flag
     global vote_list
+    global recv_var
 
     vote_list = []
     k = 0
@@ -724,6 +766,9 @@ def send_accept(m_and_msg, log_num):
         data.append(m_and_msg)
         data.append(log_num)
         data.append(k)
+        recv_var = 1
+        if debug:
+            print("sending:\n",data)
         data = encoder.encode(data)  # .encode()
         rec_thread = threading.Thread(target=thread_recver_accept, args=(log_num, k,))
         rec_thread.start()
@@ -732,8 +777,8 @@ def send_accept(m_and_msg, log_num):
             thread.start()
         start = time.clock()
         end = time.clock()
-        while (end - start) < 3:
-            end = time.clock()
+        while recv_var:
+            a=1
 
         if (majority_var <= len(vote_list)):
             k = 8
@@ -760,7 +805,7 @@ def promise(data,sock):
     log_number = (data[3])
 
     m_val_in_log = []
-    m_val_in_log.append(w_dict.get(log_number))
+    m_val_in_log.append(ts_get(log_number))
     m_val_to_send = []
     m_val_to_send.append("promise")
     m_val_to_send.append(log_number)
@@ -768,17 +813,19 @@ def promise(data,sock):
     if debug:
         print()
         print("PROMISE")
-        print("received prepare from",ipz[data[1]])
-        print("received data:",data)
-        print("m value:", m_val_in_log)
+#        print("received prepare from",ipz[data[1]])
+#        print("received data:",data)
+#        print("m value:", m_val_in_log)
 
     if m_val_in_log[0] is None:
         if debug:
             print("no m val found in",ipz[ind] )
 #        w_dict[log_number] = [data[1], -1] #overwrite in dictionary, a1
-        update_dict(log_number,[-1, -1])#overwrite in dictionary, a1
-        m_val_to_send.append(w_dict[log_number])
+        update_dict(log_number,[data[4], -1])#overwrite in dictionary, a1
+        m_val_to_send.append(ts_get(log_number))
         m_val_to_send.append(data[4])
+        m_val_to_send.append(ind)
+        m_val_to_send.append(0)
         m_val_to_send = encoder.encode(m_val_to_send)
         sendToFull(sock,m_val_to_send.encode() , (ipz[data[1]], int(portz[data[1]])+1))
     elif m_val_in_log[0][0] >= data[2]:
@@ -786,23 +833,28 @@ def promise(data,sock):
             print("sent m_val too small, sending nack from",ipz[ind] )
         m_val_to_send.append([m_val_in_log[0][0],"nack"])
         m_val_to_send.append(data[4])
+        m_val_to_send.append(ind)
+        m_val_to_send.append(1)
         m_val_to_send = encoder.encode(m_val_to_send)
         sendToFull(sock,m_val_to_send.encode() , (ipz[data[1]], int(portz[data[1]])+1))
 
     elif m_val_in_log[0][0] < data[2]:
         if debug:
             print("sent m_val is acceptable, sending event from",ipz[ind] )
-        m_val = [m_val_in_log[0][0],m_val_in_log[0][1]]# overwrite m, keep v
-        w_dict[log_number] = m_val
+        m_val = [data[2],m_val_in_log[0][1]]# overwrite m, keep v
+        update_dict(log_number,m_val)
         m_val_to_send.append(m_val)
         m_val_to_send.append(data[4])
-        print(m_val_to_send)
+        m_val_to_send.append(ind)
+        m_val_to_send.append(1)
+
+#        print(m_val_to_send)
         m_val_to_send = encoder.encode(m_val_to_send)
         sendToFull(sock,m_val_to_send.encode() , (ipz[data[1]], int(portz[data[1]])+1))
         #send promise and message
 
     if debug:
-        print(w_dict)
+#        print(w_dict)
         print("END PROMISE")
         print()
 
@@ -816,17 +868,15 @@ def prepare_wait_for_promise(m,log_num):
     global portz
     global prop_sock
     global vote_list
+    global recv_var
 
-    votes_list = []
+    vote_list = []
     data = []
     data.append("prepare")
     data.append(ind)
     data.append(m)
     data.append(log_num)
-    prop_sock[0].settimeout(2)
-#    for i in range(len(ipz)):
     k = 0
-
 
     while k < 3 :
         data = []
@@ -835,33 +885,43 @@ def prepare_wait_for_promise(m,log_num):
         data.append(m)
         data.append(log_num)
         data.append(k)
+        if debug:
+            print("sending:\n",data)
         data = encoder.encode(data)  # .encode()
+        recv_var = 1
         rec_thread = threading.Thread(target=thread_recver_prom, args=( log_num,k,))
         rec_thread.start()
         for i in range(len(sockets)):
             thread = threading.Thread(target=thread_sender, args=(sockets[i], ipz[i], portz[i], data,))
             thread.start()
-        start = time.clock()
-        end = time.clock()
-        while (end-start)<3:
-            end = time.clock()
 
+        while recv_var:
+            a=1
 
         if(majority_var <= len(vote_list)):
             k = 8
         else:
-            vote_list = []
+            if k<2:
+                vote_list = []
         k=k+1
 
     if debug:
         print("number of votes:", len(vote_list))
         print("votes:\n",vote_list)
-        print("exiting...")
 
 
     if majority_var <= len(vote_list):
-        p_msg = sorted(vote_list, key=lambda l: l[2][0], reverse=True) #sort by m, pick largest
-        p_msg = p_msg[0]
+        p_msg_list = sorted(vote_list, key=lambda l: l[2][0], reverse=True) #sort by m, pick largest
+        k = 0
+        ez_flag = 0
+        while k<len(vote_list):
+            if p_msg_list[k][2][1] != -1:
+                p_msg = p_msg_list[k]
+                k = len(vote_list)+2
+                ez_flag = 1
+            k=k+1
+        if ez_flag == 0:
+            p_msg = p_msg_list[0]
         if debug:
             print("largest elements sent:\n",p_msg)
 
@@ -882,8 +942,7 @@ def prepare_wait_for_promise(m,log_num):
 
 
     else:
-#        print("Too many servers down, could not add to log, try again.")
-        return -3, [-3,-3]
+        return -1, [m,-1]
 
 def commit(log_num, message):
 
@@ -901,8 +960,9 @@ def commit(log_num, message):
     data.append(message)
     data = encoder.encode(data)  # .encode()
 
-    for i in range(len(ipz)):
-        sendToFull(sockets[i], data.encode(), (ipz[i], portz[i]))
+    for i in range(len(sockets)):
+        thread = threading.Thread(target=thread_sender, args=(sockets[i], ipz[i], portz[i], data,))
+        thread.start()
 
 def catch_all_logic(message, m_and_msg):
 
@@ -934,7 +994,7 @@ def catch_all_logic(message, m_and_msg):
             return -3
     if quick_split[0] == "cancel":
         for x in range(len(log)):
-            print(log[x])
+ #           print(log[x])
             if log[x][2] == quick_split[1]:
                 cancel_flag = 1
 
@@ -968,18 +1028,24 @@ def synod(message,log_num):
         print("SYNOD")
 
     if leader_flag == 1: # am leader
-        m_and_msg = [0,-1]
+        m_and_msg = ["0", -1]
+#        print("m_and_msg:",m_and_msg)
         catch = catch_all_logic(message, m_and_msg)
         if catch == -3:
             if debug:
                 print("Can't schedule, conflict.")
             split = message.split()
             if split[0] == "schedule":
-                print("Unable to schedule meeting",split[1])
+                print("Unable to schedule meeting " +split[1]+".")
                 return 1
             if split[0] == "cancel":
-                print("Unable to cancel meeting", split[1])
-        m_and_msg = [100,message]
+                print("Unable to cancel meeting " +split[1]+".")
+                return 1
+        if catch == -2:
+
+            return 1
+
+        m_and_msg = [0,message]
         enough_votes = send_accept(m_and_msg,log_num)
         if enough_votes == -3:
             leader_flag = 0
@@ -987,6 +1053,7 @@ def synod(message,log_num):
                 print("Not enough servers, no longer leader")
         else:
             busy_log = 1
+            commit(log_num, m_and_msg)
             commit(log_num, m_and_msg)
             if debug:
                 print("Leader ")
@@ -999,6 +1066,12 @@ def synod(message,log_num):
 
             if debug:
                 print("leader synod over")
+
+            split = message.split()
+            if split[0] == "schedule":
+                print("Meeting",split[1],"has been scheduled" )
+            elif split[0] == "cancel":
+                print("Meeting", split[1],"canceled")
             return 1
 
     promise_flag = -1
@@ -1008,13 +1081,11 @@ def synod(message,log_num):
         m = ind+1
         while promise_flag ==-1:
             promise_flag, m_and_msg = prepare_wait_for_promise(m,log_num)
-            if promise_flag == -3: #message failed
-                return 0
             if debug:
                 print("promise flag:",promise_flag)
                 print("m_value:", m_and_msg)
             if promise_flag == -1:
-                m = m_and_msg[0] +ind+1
+                m = m_and_msg[0]+ind+1
 
         if debug:
             print("values chosen for accept: "+ str(m_and_msg[0]) + ", message: "+ str(m_and_msg[1]))
@@ -1029,9 +1100,9 @@ def synod(message,log_num):
                 if message != -1:
                     split = message.split()
                     if split[0] == "schedule":
-                        print("Unable to schedule meeting", split[1])
+                        print("Unable to schedule meeting " +split[1]+".")
                     if split[0] == "cancel":
-                        print("Unable to cancel meeting", split[1])
+                        print("Unable to cancel meeting " + split[1]+".")
 
                 return 1
             m_and_msg[1] = message
@@ -1061,6 +1132,13 @@ def synod(message,log_num):
 
     if debug:
         print("synod over")
+
+    split = message.split()
+    if split[0] == "schedule":
+        print("Meeting", split[1], "scheduled.")
+    elif split[0] == "cancel":
+        print("Meeting", split[1], "canceled.")
+
     return 1
 
 def main():
@@ -1126,11 +1204,18 @@ def main():
             print("enter a message.")
         elif splitMESSAGE[0]=="exit":
             splitMESSAGE= "exit"
+            start = time.clock()
+            end = time.clock()
+            while(end-start)<4:
+                end = time.clock()
+
             splitMESSAGE = encoder.encode(splitMESSAGE)
             proposer_inbox.append(["exit", 1])
             learner_inbox.append(["exit", 1])
-            sendToFull(sockets[ind],splitMESSAGE.encode(),(ipz[ind], portz[ind]))
             exit_flag = 1
+            sendToFull(sockets[ind],splitMESSAGE.encode(),(ipz[ind], portz[ind]))
+#            print("prop_box:\n",proposer_inbox)
+#            print("learner_box:\n",learner_inbox)
 
         elif splitMESSAGE[0]=="debug":
             debug = (debug+1)%2
@@ -1174,6 +1259,9 @@ def main():
             else:
                 print("I am not the leader")
 
+        elif splitMESSAGE[0] == "box":
+            print("prop_box:\n",proposer_inbox)
+            print("learner_box:\n",learner_inbox)
         else:
             print("Error: input {0} not recognized as a valid command".format(MESSAGE))
 #         send_all(splitMESSAGE,ipz,portz)
