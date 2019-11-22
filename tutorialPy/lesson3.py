@@ -136,7 +136,7 @@ if __name__ == "__main__":
     print("")
     print("There is a ton you can do with this.")
     print("Make some sorting data structure or some binary tree thing")
-    print("Make a fake store that lets you stock it and sell shit at a profit, track how much you make")
+    print("Make a fake store that lets you stock it and sell stuff at a profit, track how much you make")
     print("Make a hash table data structure")
     print("Simulate some OS scheduling or memory management algorithm")
     print("")
