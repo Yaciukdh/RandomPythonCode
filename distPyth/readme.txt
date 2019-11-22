@@ -41,7 +41,7 @@ ben,abby,ken,phoebe
 
 An example of this command would be:
 
-schedule 
+schedule practice 08:00 14:00 paul,george,john
 
 To cancel an event:
 
