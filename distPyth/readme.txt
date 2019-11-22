@@ -4,7 +4,7 @@ This is Paxos, mostly written by me. Framework was based on a previous project I
 but we were given a B, the group disband, and there was some rewriting so the vast majority of it is my code 
 at this point.
 
-It's meant to be run through multiple terminals on the same network.
+It's meant to be run through multiple terminals on the same network OR with docker images. I've done both.
 
 When the program is executed, it creates .txt files containing the log, schedule, and dictionary. 
 
